@@ -1,0 +1,49 @@
+services:
+  shortener-service:
+    build: ./shortener-service
+    ports:
+      - "8080:8080"
+    depends_on:
+      - redis
+      - rabbitmq
+    restart: on-failure
+    env_file:
+      - ./.env
+    environment:
+      - GIN_MODE=release
+
+  analytics-service:
+    build: ./analytics-service
+    ports:
+      - "8081:8081"
+    depends_on:
+      - postgres
+      - rabbitmq
+    restart: on-failure
+    env_file:
+      - ./.env
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+
+volumes:
+  postgres_data:
