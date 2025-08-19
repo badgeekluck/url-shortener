@@ -1,0 +1,34 @@
+[
+  {
+    "key": "config/postgres/user",
+    "value": "harunbas"
+  },
+  {
+    "key": "config/postgres/password",
+    "value": "12345678"
+  },
+  {
+    "key": "config/postgres/dbname",
+    "value": "analytics_db"
+  },
+  {
+    "key": "config/jwt/secret",
+    "value": "buraya-cok-guvenli-ve-tahmin-edilemez-bir-metin-yaz"
+  },
+  {
+    "key": "config/redis/host",
+    "value": "redis"
+  },
+  {
+    "key": "config/redis/port",
+    "value": "6379"
+  },
+  {
+    "key": "config/rabbitmq/host",
+    "value": "rabbitmq"
+  },
+  {
+    "key": "config/rabbitmq/port",
+    "value": "5672"
+  }
+]
