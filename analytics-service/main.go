@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/joho/godotenv"
+	"github.com/hashicorp/consul/api"
 	_ "github.com/lib/pq"
 	"github.com/streadway/amqp"
 )
@@ -22,6 +22,15 @@ type ClickEvent struct {
 type AnalyticsResult struct {
 	TotalClicks  int64       `json:"total_clicks"`
 	RecentClicks []time.Time `json:"recent_clicks"`
+}
+
+func getConfig(kv *api.KV, key string, defaultValue string) string {
+	pair, _, err := kv.Get(key, nil)
+	if err != nil || pair == nil {
+		log.Printf("Consul'dan '%s' anahtarı okunamadı, varsayılan değer kullanılıyor.", key)
+		return defaultValue
+	}
+	return string(pair.Value)
 }
 
 func startMessageConsumer(db *sql.DB) {
@@ -70,19 +79,49 @@ func startMessageConsumer(db *sql.DB) {
 }
 
 func main() {
-	err := godotenv.Load()
+
+	consulConfig := api.DefaultConfig()
+	consulConfig.Address = "consul:8500" // Docker içindeki adres
+	consulClient, err := api.NewClient(consulConfig)
 	if err != nil {
-		log.Println("Uyarı: .env dosyası bulunamadı.")
+		log.Fatalf("Consul istemcisi oluşturulamadı: %v", err)
 	}
+	kv := consulClient.KV()
+
+	dbUser := getConfig(kv, "config/postgres/user", "postgres")
+	dbPassword := getConfig(kv, "config/postgres/password", "")
+	dbName := getConfig(kv, "config/postgres/dbname", "analytics_db")
+
+	dbHost := "postgres"
+	dbPort := "5432"
+
 	connStr := fmt.Sprintf("user=%s password=%s dbname=%s host=%s port=%s sslmode=disable",
-		os.Getenv("DB_USER"), os.Getenv("DB_PASSWORD"), os.Getenv("DB_NAME"), os.Getenv("DB_HOST"), os.Getenv("DB_PORT"))
+		dbUser, dbPassword, dbName, dbHost, dbPort)
 
 	db, err := sql.Open("postgres", connStr)
 	if err != nil {
 		log.Fatalf("PostgreSQL'e bağlanamadı: %s", err)
 	}
 	defer db.Close()
+
+	err = db.Ping()
+	if err != nil {
+		log.Fatalf("PostgreSQL'e ping atılamadı: %s", err)
+	}
 	log.Println("PostgreSQL'e başarıyla bağlanıldı.")
+
+	registration := &api.AgentServiceRegistration{
+		ID:      "analytics-service-1",
+		Name:    "analytics-service",
+		Port:    8081,
+		Address: "analytics-service",
+	}
+
+	err = consulClient.Agent().ServiceRegister(registration)
+	if err != nil {
+		log.Fatalf("Servis Consul'a kaydedilemedi: %v", err)
+	}
+	log.Println("Servis başarıyla Consul'a kaydedildi.")
 
 	// RabbitMQ dinleyicisini arka planda bir goroutine olarak başlatıyoruz.
 	// Bu sayede programın ana akışı web sunucusunu çalıştırmaya devam edebilir.

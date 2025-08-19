@@ -16,7 +16,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/go-redis/redis/v8"
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/joho/godotenv"
+	"github.com/hashicorp/consul/api"
 	"github.com/lib/pq"
 	"github.com/streadway/amqp"
 	"golang.org/x/crypto/bcrypt"
@@ -48,64 +48,95 @@ type LoginRequest struct {
 	Password string `json:"password" binding:"required"`
 }
 
-func init() {
-	err := godotenv.Load()
-	if err != nil {
-		log.Println("Uyarı: .env dosyası bulunamadı.")
+func getConfig(kv *api.KV, key string, defaultValue string) string {
+	pair, _, err := kv.Get(key, nil)
+	if err != nil || pair == nil {
+		log.Printf("Consul'dan '%s' anahtarı okunamadı, varsayılan değer kullanılıyor.", key)
+		return defaultValue
 	}
+	return string(pair.Value)
+}
 
-	dbHost := os.Getenv("DB_HOST")
-	dbPort := os.Getenv("DB_PORT")
-	dbUser := os.Getenv("DB_USER")
-	dbPassword := os.Getenv("DB_PASSWORD")
-	dbName := os.Getenv("DB_NAME")
+func init() {
+
+	// --- 1. Consul'a Bağlan ---
+	consulConfig := api.DefaultConfig()
+	consulConfig.Address = "consul:8500"
+	consulClient, err := api.NewClient(consulConfig)
+	if err != nil {
+		log.Fatalf("Consul istemcisi oluşturulamadı: %v", err)
+	}
+	kv := consulClient.KV()
+
+	// Redis Ayarları
+	redisHost := getConfig(kv, "config/redis/host", "redis")
+	redisPort := getConfig(kv, "config/redis/port", "6379")
+
+	redisAddr := fmt.Sprintf("%s:%s", redisHost, redisPort)
+
+	// RabbitMQ Ayarları
+	rmqHost := getConfig(kv, "config/rabbitmq/host", "rabbitmq")
+	rmqPort := getConfig(kv, "config/rabbitmq/port", "5672")
+
+	rmqAddr := fmt.Sprintf("amqp://guest:guest@%s:%s/", rmqHost, rmqPort)
+
+	// PostgreSQL Ayarları
+	dbHost := "postgres" // Şimdilik servis keşfi olmadan, Docker DNS kullanıyoruz
+	dbPort := "5432"
+	dbUser := getConfig(kv, "config/postgres/user", "postgres")
+	dbPassword := getConfig(kv, "config/postgres/password", "")
+	dbName := getConfig(kv, "config/postgres/dbname", "analytics_db")
 
 	connStr := fmt.Sprintf("user=%s password=%s dbname=%s host=%s port=%s sslmode=disable",
 		dbUser, dbPassword, dbName, dbHost, dbPort)
 
-	db, err = sql.Open("postgres", connStr)
-	if err != nil {
-		log.Fatalf("PostgreSQL'e bağlanılamadı: %s", err)
-	}
-
-	err = db.Ping() // Bağlantıyı doğrula
-	if err != nil {
-		log.Fatalf("PostgreSQL'e ping atılamadı: %s", err)
-	}
-
-	fmt.Println("PostgreSQL'e başarıyla bağlanıldı.")
-
-	redisHost := os.Getenv("REDIS_HOST")
-	redisPort := os.Getenv("REDIS_PORT")
-	redisAddr := fmt.Sprintf("%s:%s", redisHost, redisPort)
-
+	// Redis Bağlantısı
 	rdb = redis.NewClient(&redis.Options{Addr: redisAddr})
 	_, err = rdb.Ping(ctx).Result()
 	if err != nil {
 		log.Fatalf("Redis sunucusuna bağlanılamadı: %v", err)
 	}
-	fmt.Println("Redis sunucusuna başarıyla bağlanıldı.")
+	fmt.Println("Shortener-Service: Redis'e başarıyla bağlanıldı.")
 
-	rmqHost := os.Getenv("RABBITMQ_HOST")
-	rmqPort := os.Getenv("RABBITMQ_PORT")
-	rmqAddr := fmt.Sprintf("amqp://guest:guest@%s:%s/", rmqHost, rmqPort)
-
+	// RabbitMQ Bağlantısı
 	conn, err := amqp.Dial(rmqAddr)
 	if err != nil {
 		log.Fatalf("RabbitMQ'ya bağlanamadı: %s", err)
 	}
-
 	ch, err := conn.Channel()
 	if err != nil {
-		log.Fatalf("Kanal açılamadı: %s", err)
+		log.Fatalf("RabbitMQ kanalı açılamadı: %s", err)
 	}
 	rmqChan = ch
-
 	_, err = rmqChan.QueueDeclare("clicks", true, false, false, false, nil)
 	if err != nil {
-		log.Fatalf("Kuyruk oluşturulamadı: %s", err)
+		log.Fatalf("RabbitMQ kuyruğu oluşturulamadı: %s", err)
 	}
-	fmt.Println("RabbitMQ'ya başarıyla bağlanıldı.")
+	fmt.Println("Shortener-Service: RabbitMQ'ya başarıyla bağlanıldı.")
+
+	// PostgreSQL Bağlantısı
+	db, err = sql.Open("postgres", connStr)
+	if err != nil {
+		log.Fatalf("PostgreSQL'e bağlanılamadı: %s", err)
+	}
+	err = db.Ping()
+	if err != nil {
+		log.Fatalf("PostgreSQL'e ping atılamadı: %s", err)
+	}
+	fmt.Println("Shortener-Service: PostgreSQL'e başarıyla bağlanıldı.")
+
+	// --- 4. Servisi Consul'a Kaydet ---
+	registration := &api.AgentServiceRegistration{
+		ID:      "shortener-service-1",
+		Name:    "shortener-service",
+		Port:    8080,
+		Address: "shortener-service",
+	}
+	err = consulClient.Agent().ServiceRegister(registration)
+	if err != nil {
+		log.Fatalf("Servis Consul'a kaydedilemedi: %v", err)
+	}
+	log.Println("Servis başarıyla Consul'a kaydedildi.")
 }
 
 func generateShortCode() string {
