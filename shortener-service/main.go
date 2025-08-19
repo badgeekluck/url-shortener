@@ -18,6 +18,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/hashicorp/consul/api"
 	"github.com/lib/pq"
+	"github.com/skip2/go-qrcode"
 	"github.com/streadway/amqp"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -335,6 +336,31 @@ func main() {
 			"original_url": req.URL,
 			"short_url":    "http://localhost:8080/" + shortCode,
 		})
+	})
+
+	router.GET("/qr/:shortCode", func(c *gin.Context) {
+		shortCode := c.Param("shortCode")
+
+		val, err := rdb.Exists(ctx, shortCode).Result()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Sunucu hatası"})
+			return
+		}
+		if val == 0 {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Bu kısa link mevcut değil."})
+			return
+		}
+
+		fullShortURL := "http://localhost:8080/" + shortCode
+
+		pngBytes, err := qrcode.Encode(fullShortURL, qrcode.Medium, 256)
+		if err != nil {
+			log.Printf("QR kod üretilemedi: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "QR kod oluşturulamadı."})
+			return
+		}
+		c.Header("Content-Type", "image/png")
+		c.Data(http.StatusOK, "image/png", pngBytes)
 	})
 
 	// Örneğin: /pWk8vN isteği geldiğinde, shortCode = "pWk8vN" olur.
