@@ -186,6 +186,24 @@ func authMiddleware() gin.HandlerFunc {
 	}
 }
 
+func publishClickEvent(shortCode string) {
+	event := ClickEvent{ShortCode: shortCode}
+	eventBody, _ := json.Marshal(event)
+	err := rabbitMqChannel.Publish(
+		"",       // exchange
+		"clicks", // routing key (kuyruk adı)
+		false,    // mandatory
+		false,    // immediate
+		amqp.Publishing{
+			ContentType:  "application/json",
+			DeliveryMode: amqp.Persistent, // diske kaydetme için bu gerekli
+			Body:         eventBody,
+		})
+	if err != nil {
+		log.Printf("RabbitMQ'ya mesaj gönderilemedi: %s", err)
+	}
+}
+
 func main() {
 	router := gin.Default()
 
@@ -489,26 +507,48 @@ func main() {
 		})
 	}
 
-	// --- 3. Herkese Açık ve Dinamik Endpoint (EN SONDA) ---
 	router.GET("/:shortCode", func(c *gin.Context) {
 		shortCode := c.Param("shortCode")
+
+		// 1. Önce Cache'i (Redis) kontrol et.
 		originalURL, err := redisClient.Get(ctx, shortCode).Result()
-		if err == redis.Nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "Kısa URL bulunamadı."})
+		if err == nil {
+			// CACHE HIT: Redis'te bulundu, harika!
+			log.Printf("Cache HIT for %s", shortCode)
+			// Hızlıca RabbitMQ'ya mesaj gönder ve yönlendir.
+			publishClickEvent(shortCode)
+			c.Redirect(http.StatusFound, originalURL)
 			return
-		} else if err != nil {
+		}
+
+		// Redis'te bir hata var ama bu redis.Nil değilse, logla.
+		if err != redis.Nil {
+			log.Printf("Yönlendirme sırasında Redis hatası: %v", err)
+		}
+
+		// 2. Cache'te yoksa (CACHE MISS), ana veritabanına (PostgreSQL) sor.
+		log.Printf("Cache MISS for %s. Veritabanı sorgulanıyor...", shortCode)
+		err = database.QueryRow("SELECT original_url FROM links WHERE short_code = $1", shortCode).Scan(&originalURL)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				// Veritabanında da yoksa, link gerçekten mevcut değildir.
+				c.JSON(http.StatusNotFound, gin.H{"error": "Kısa URL bulunamadı."})
+				return
+			}
+			// Başka bir veritabanı hatası.
+			log.Printf("Yönlendirme sırasında veritabanı hatası: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Sunucu hatası."})
 			return
 		}
-		event := ClickEvent{ShortCode: shortCode}
-		eventBody, _ := json.Marshal(event)
-		err = rabbitMqChannel.Publish(
-			"", "clicks", false, false,
-			amqp.Publishing{ContentType: "application/json", Body: eventBody},
-		)
+
+		// 3. Veritabanında bulundu! Gelecekteki istekler için Redis'e (cache'e) geri yaz.
+		err = redisClient.Set(ctx, shortCode, originalURL, 0).Err()
 		if err != nil {
-			log.Printf("RabbitMQ'ya mesaj gönderilemedi: %s", err)
+			log.Printf("Cache'e geri yazılamadı: %v", err)
 		}
+
+		// RabbitMQ'ya mesaj gönder ve yönlendir.
+		publishClickEvent(shortCode)
 		c.Redirect(http.StatusFound, originalURL)
 	})
 
