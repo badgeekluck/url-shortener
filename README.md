@@ -1,10 +1,10 @@
 # Go ile Mikroservis URL Kısaltma Projesi
 
-Bu proje, Go dili kullanılarak geliştirilmiş, kullanıcı hesapları, tıklama analitiği ve etiketleme gibi özellikler içeren modern bir mikroservis mimarisine sahip URL kısaltma uygulamasıdır. Tüm sistem, Docker, Docker Compose ve Consul kullanılarak konteynerize edilmiştir ve tek bir komutla çalıştırılabilir.
+Bu proje, Go dili kullanılarak geliştirilmiş, kullanıcı hesapları, tıklama analitiği ve etiketleme gibi özellikler içeren modern ve dayanıklı bir mikroservis mimarisine sahip URL kısaltma uygulamasıdır. Tüm sistem, Docker, Docker Compose ve Consul kullanılarak konteynerize edilmiştir ve tek bir komutla çalıştırılabilir.
 
 ## Mimari Şeması
 
-Sistem, görevleri ayrılmış iki ana mikroservis, asenkron iletişim için bir mesaj kuyruğu, merkezi yapılandırma/servis keşfi ve farklı amaçlar için kullanılan iki ayrı veritabanından oluşur.
+Sistem, görevleri ayrılmış iki ana mikroservis, asenkron ve güvenilir iletişim için bir mesaj kuyruğu, merkezi yapılandırma/servis keşfi ve farklı amaçlar için kullanılan iki ayrı veritabanından oluşur.
 
 ```mermaid
 graph LR
@@ -12,55 +12,59 @@ graph LR
         User[Kullanıcı / Client]
     end
 
-subgraph "Docker Compose Ortamı"
-Shortener[Shortener Service Go, Gin]
-Analytics[Analytics Service Go, Gin]
-RabbitMQ[RabbitMQ Mesaj Kuyruğu]
-Postgres[PostgreSQL Ana Veritabanı]
-Redis[Redis Cache / Hızlı Erişim]
-Consul[Consul Servis Keşfi / KV Store]
+    subgraph "Docker Compose Ortamı"
+        Shortener[Shortener Service API Gateway]
+        Analytics[Analytics Service Asenkron İşçi]
+        RabbitMQ[RabbitMQ Dayanıklı Mesajlaşma]
+        Postgres[PostgreSQL Tek Doğruluk Kaynağı]
+        Redis[Redis Önbellek Katmanı]
+        Consul[Consul Servis Keşfi / KV Store]
 
-User -- HTTP İstekleri --> Shortener
-User -- Analitik İsteği --> Analytics
+        User -- HTTP API İstekleri --> Shortener
+        User -- Analitik API --> Analytics
 
-Shortener -- Veritabanı Sorguları --> Postgres
-Shortener -- Hızlı Link Sorgulama --> Redis
-Shortener -- "Tıklandı" Olayı --> RabbitMQ
-Shortener -- Ayarları Oku / Servis Kaydet --> Consul
+        Shortener -- Kalıcı Kayıt Oku/Yaz --> Postgres
+        Shortener -- Hızlı Erişim İçin Önbellek --> Redis
+        Shortener -- "Tıklandı" Olayı (Kalıcı Mesaj) --> RabbitMQ
+        Shortener -- Ayarları Oku / Servis Kaydet --> Consul
 
-RabbitMQ -- Olayları Tüket --> Analytics
-Analytics -- Veritabanı Sorguları --> Postgres
-Analytics -- Ayarları Oku / Servis Kaydet --> Consul
-end
+        RabbitMQ -- Mesajları Güvenli Tüket (Ack/Nack) --> Analytics
+        Analytics -- Veritabanı Yaz/Oku --> Postgres
+        Analytics -- Ayarları Oku / Servis Kaydet --> Consul
+    end
 ```
 
 ## ⭐ Özellikler
 
 - **Kullanıcı Yönetimi:** Güvenli parola hash'leme (`bcrypt`) ile kullanıcı kaydı ve JWT (JSON Web Token) tabanlı giriş sistemi.
 - **Gelişmiş Link Yönetimi:**
-    - Giriş yapmış kullanıcılar için link oluşturma ve listeleme.
+    - Giriş yapmış kullanıcılar için kalıcı link oluşturma ve listeleme.
     - Hem rastgele hem de kullanıcı tanımlı **özel kısa linkler** oluşturma.
     - Linkleri daha iyi organize etmek için **etiketleme (tagging)** özelliği.
-- **Asenkron Analitik:** Tıklama olayları, ana yönlendirme işlemini yavaşlatmamak için RabbitMQ üzerinden asenkron olarak işlenir.
-- **Analitik API:** Her bir link için toplam tıklanma sayısı gibi istatistikleri sunan bir API.
+- **Dayanıklılık ve Güvenilirlik:**
+    - **Tek Doğruluk Kaynağı:** Tüm linkler (anonim veya değil) kalıcı olarak PostgreSQL'de saklanır, Redis sadece bir önbellek katmanıdır.
+    - **Kalıcı Mesajlaşma:** RabbitMQ sunucusu yeniden başlasa bile tıklama mesajları kaybolmaz.
+    - **Güvenli Mesaj İşleme:** Tüketici servis (`analytics-service`) bir mesajı işlerken hata alırsa, mesaj kaybolmaz ve daha sonra yeniden denenmek üzere kuyruğa geri eklenir (Manual Ack/Nack).
+    - **Mükerrer Kayıt Engelleme (Idempotency):** Aynı tıklama mesajı birden fazla kez gelse bile veritabanına sadece tek bir kayıt atılır.
+    - **Graceful Shutdown:** Servisler, kapanma sinyali aldıklarında mevcut işlemleri bitirerek ve bağlantıları temizleyerek "kibarca" kapanır.
+- **Asenkron Analitik:** Tıklama olayları, RabbitMQ üzerinden asenkron olarak işlenir.
+- **Analitik API:** Her bir link için tıklanma istatistiklerini sunan bir API.
 - **QR Kod Üretimi:** Her kısa link için anında QR kod üreten bir endpoint.
-- **Merkezi Yönetim:** Consul ile servis keşfi ve merkezi yapılandırma yönetimi.
-- **Konteynerizasyon:** Tüm proje, Docker ve Docker Compose ile paketlenmiştir, bu da geliştirme ve dağıtım süreçlerini basitleştirir.
+- **Merkezi Yönetim:** Consul ile servis keşfi ve dinamik yapılandırma yönetimi.
+- **Konteynerizasyon:** Tüm proje, Docker ve Docker Compose ile paketlenmiştir.
 
 ## 🛠️ Kullanılan Teknolojiler
 
 - **Backend:** Go, Gin Web Framework
 - **Veritabanları:**
     - **PostgreSQL:** Kullanıcılar, linkler, etiketler ve analitik verileri için kalıcı ana veritabanı.
-    - **Redis:** Yüksek hızlı yönlendirme ve çakışma kontrolü için önbellek (cache).
-- **Mesajlaşma:** RabbitMQ (Servisler arası asenkron iletişim).
-- **Servis Yönetimi:** Consul (Servis Keşfi, Merkezi Yapılandırma, Sağlık Kontrolü).
-- **Kimlik Doğrulama:** JWT (JSON Web Tokens)
+    - **Redis:** Yüksek hızlı yönlendirme için önbellek (cache).
+- **Mesajlaşma:** RabbitMQ
+- **Servis Yönetimi:** Consul
+- **Kimlik Doğrulama:** JWT
 - **Containerization:** Docker, Docker Compose
 
 ## 🚀 Başlarken
-
-Projeyi yerel makinenizde çalıştırmak için aşağıdaki adımları izleyin.
 
 ### Gereksinimler
 
@@ -99,13 +103,12 @@ Projeyi yerel makinenizde çalıştırmak için aşağıdaki adımları izleyin.
         ```
 
 3.  **Uygulamayı Başlatın:**
-    Aşağıdaki komut, tüm servislerin imajlarını oluşturacak ve konteynerleri arka planda başlatacaktır.
     ```sh
     docker-compose up --build -d
     ```
 
 4.  **Veritabanı Tablolarını Oluşturun:**
-    Uygulama başladıktan sonra (yaklaşık 30 saniye bekleyin), kullandığınız bir veritabanı istemcisi (DBeaver, DataGrip vb.) ile `localhost:5433` adresindeki `analytics_db` veritabanına bağlanın ve aşağıdaki SQL komutlarını çalıştırarak tabloları oluşturun.
+    Uygulama başladıktan sonra (yaklaşık 30 saniye bekleyin), bir veritabanı istemcisi ile `localhost:5433` adresindeki `analytics_db` veritabanına bağlanın ve aşağıdaki SQL komutlarını çalıştırın.
 
     <details>
     <summary>Tablo Oluşturma SQL Komutları</summary>
@@ -132,6 +135,7 @@ Projeyi yerel makinenizde çalıştırmak için aşağıdaki adımları izleyin.
     CREATE TABLE clicks (
         id SERIAL PRIMARY KEY,
         short_code VARCHAR(50) NOT NULL,
+        message_id VARCHAR(36) UNIQUE, -- Mükerrer kayıt engelleme için
         clicked_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
     );
 
@@ -158,7 +162,7 @@ Projeyi yerel makinenizde çalıştırmak için aşağıdaki adımları izleyin.
 | :--- | :--- | :--- |
 | `POST` | `/register` | Yeni kullanıcı hesabı oluşturur. |
 | `POST` | `/login` | Giriş yapar ve bir JWT döner. |
-| `POST` | `/shorten` | Kalıcı olmayan, anonim bir kısa link oluşturur (Sadece Redis'e yazar). |
+| `POST` | `/shorten` | Kalıcı ve anonim bir kısa link oluşturur (PostgreSQL'e yazar). |
 | `GET` | `/qr/:shortCode` | Belirtilen kısa link için bir QR kod resmi döner. |
 | `GET` | `/:shortCode` | Kısa linki orijinal adresine yönlendirir. |
 
@@ -168,50 +172,11 @@ Projeyi yerel makinenizde çalıştırmak için aşağıdaki adımları izleyin.
 | Metot | Path | Açıklama |
 | :--- | :--- | :--- |
 | `POST` | `/links` | Giriş yapmış kullanıcı için kalıcı ve etiketli yeni bir kısa link oluşturur. |
-| `GET` | `/links` | Giriş yapmış kullanıcının tüm linklerini etiketleriyle birlikte listeler. `?tag=...` parametresi ile filtreleme yapılabilir. |
+| `GET` | `/links` | Giriş yapmış kullanıcının tüm linklerini etiketleriyle birlikte listeler. `?tag=marketing` gibi bir parametre ile filtreleme yapılabilir. |
 | `GET` | `/analytics/:shortCode` | Belirtilen kısa link için tıklanma istatistiklerini döner. |
 
 ## 📖 Kullanım ve Test Senaryosu
 
-Aşağıdaki adımlar, sistemin tüm ana işlevlerini test etmenizi sağlayan baştan sona bir kullanım senaryosudur. Komutları terminalinizde sırasıyla çalıştırabilirsiniz.
+Aşağıdaki adımlar, sistemin tüm ana işlevlerini test etmenizi sağlayan baştan sona bir kullanım senaryosudur.
 
-**1. Yeni Bir Kullanıcı Kaydedin**
-
-```sh
-curl -X POST http://localhost:8080/register \
--H "Content-Type: application/json" \
--d '{"email": "kullanici@example.com", "password": "guvenlisifre123"}'
-```
-
-**2. Giriş Yapın ve Erişim Token'ı Alın**
-(`jq` kurulu olmalıdır).
-```sh
-TOKEN=$(curl -s -X POST http://localhost:8080/login \
-  -H "Content-Type: application/json" \
-  -d '{"email": "kullanici@example.com", "password": "guvenlisifre123"}' | jq -r .token)
-```
-
-**3. Korumalı Endpoint ile Etiketli Bir Link Oluşturun**
-```sh
-curl -X POST http://localhost:8080/links \
--H "Authorization: Bearer $TOKEN" \
--H "Content-Type: application/json" \
--d '{"url": "[https://github.com/hashicorp/consul](https://github.com/hashicorp/consul)", "custom_short": "consul-projesi", "tags": ["devops", "consul"]}'
-```
-
-**4. Linklerinizi Listeleyin ve Etiketleri Görün**
-```sh
-curl -X GET http://localhost:8080/links \
--H "Authorization: Bearer $TOKEN"
-```
-
-**5. Yönlendirmeyi ve Analitiği Test Edin**
-Tarayıcınızda `http://localhost:8080/consul-projesi` adresine gidin.
-
-**6. Tıklama Verisini Kontrol Edin**
-```sh
-curl http://localhost:8081/analytics/consul-projesi
-```
-
-**7. QR Kodu Görüntüleyin**
-Tarayıcınızda `http://localhost:8080/qr/consul-projesi` adresine gidin.
+**
