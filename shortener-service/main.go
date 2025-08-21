@@ -8,8 +8,11 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -165,7 +168,7 @@ func authMiddleware() gin.HandlerFunc {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Authorization header formatı hatalı."})
 			return
 		}
-		jwtSecretKey := getConfig(consulClient.KV(), "config/jwt/secret", "default_secret")
+
 		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
 			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 				return nil, fmt.Errorf("beklenmedik imzalama metodu: %v", token.Header["alg"])
@@ -562,5 +565,45 @@ func main() {
 		c.Redirect(http.StatusFound, originalURL)
 	})
 
-	router.Run(":8080")
+	srv := &http.Server{
+		Addr:         ":8080",
+		Handler:      router,
+		ReadTimeout:  10 * time.Second, // İstek başlığının ve gövdesinin okunması için max süre
+		WriteTimeout: 10 * time.Second, // Cevabın yazılması için max süre
+		IdleTimeout:  15 * time.Second, // Keep-alive bağlantısının boşta kalabileceği max süre
+	}
+
+	go func() {
+		log.Println("HTTP sunucusu :8080 portunda başlatılıyor...")
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Sunucu hatası: %s\n", err)
+		}
+	}()
+	
+	// Kapanma sinyallerini (Ctrl+C veya Docker'dan gelen SIGTERM) dinlemek için bir channel oluşturulur.
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+
+	// Sinyal gelene kadar burada bekle (programı açık tutar).
+	<-quit
+	log.Println("Kapanma sinyali alındı, sunucu kibarca kapatılıyor...")
+
+	// Kapanma işlemleri için bir context oluştur (örneğin 5 saniye timeout ile).
+	// Eğer aktif istekler 5 saniyeden uzun sürerse, yine de kapanmaya zorla.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// HTTP sunucusunu kapat.
+	// Bu, yeni istekleri kabul etmeyi durdurur ve mevcut isteklerin bitmesini bekler.
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Fatal("Sunucu kapatılırken hata oluştu:", err)
+	}
+
+	// Diğer bağlantıları temizle.
+	log.Println("Veritabanı ve diğer bağlantılar kapatılıyor...")
+	database.Close()
+	redisClient.Close()
+	rabbitMqChannel.Close()
+
+	log.Println("Tüm işlemler tamamlandı. Sunucu çıkıyor.")
 }
