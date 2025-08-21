@@ -23,11 +23,11 @@ import (
 )
 
 var (
-	rdb          *redis.Client
-	rmqChan      *amqp.Channel
-	db           *sql.DB
-	consulClient *api.Client
-	ctx          = context.Background()
+	redisClient     *redis.Client
+	rabbitMqChannel *amqp.Channel
+	database        *sql.DB
+	consulClient    *api.Client
+	ctx             = context.Background()
 )
 
 // --- Struct Tanımlamaları ---
@@ -93,8 +93,8 @@ func init() {
 		dbUser, dbPassword, dbName, dbHost, dbPort)
 
 	// Servislere Bağlan
-	rdb = redis.NewClient(&redis.Options{Addr: redisAddr})
-	_, err = rdb.Ping(ctx).Result()
+	redisClient = redis.NewClient(&redis.Options{Addr: redisAddr})
+	_, err = redisClient.Ping(ctx).Result()
 	if err != nil {
 		log.Fatalf("Redis sunucusuna bağlanılamadı: %v", err)
 	}
@@ -108,18 +108,18 @@ func init() {
 	if err != nil {
 		log.Fatalf("RabbitMQ kanalı açılamadı: %s", err)
 	}
-	rmqChan = ch
-	_, err = rmqChan.QueueDeclare("clicks", true, false, false, false, nil)
+	rabbitMqChannel = ch
+	_, err = rabbitMqChannel.QueueDeclare("clicks", true, false, false, false, nil)
 	if err != nil {
 		log.Fatalf("RabbitMQ kuyruğu oluşturulamadı: %s", err)
 	}
 	fmt.Println("Shortener-Service: RabbitMQ'ya başarıyla bağlanıldı.")
 
-	db, err = sql.Open("postgres", connStr)
+	database, err = sql.Open("postgres", connStr)
 	if err != nil {
 		log.Fatalf("PostgreSQL'e bağlanılamadı: %s", err)
 	}
-	err = db.Ping()
+	err = database.Ping()
 	if err != nil {
 		log.Fatalf("PostgreSQL'e ping atılamadı: %s", err)
 	}
@@ -202,7 +202,7 @@ func main() {
 			return
 		}
 		var newUserID int
-		err = db.QueryRow(
+		err = database.QueryRow(
 			"INSERT INTO users (email, password_hash) VALUES ($1, $2) RETURNING id",
 			req.Email, string(hashedPassword),
 		).Scan(&newUserID)
@@ -226,7 +226,7 @@ func main() {
 		}
 		var userID int
 		var hashedPassword string
-		err := db.QueryRow("SELECT id, password_hash FROM users WHERE email = $1", req.Email).Scan(&userID, &hashedPassword)
+		err := database.QueryRow("SELECT id, password_hash FROM users WHERE email = $1", req.Email).Scan(&userID, &hashedPassword)
 		if err != nil {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Geçersiz email veya parola."})
 			return
@@ -262,7 +262,7 @@ func main() {
 		var shortCode string
 		if req.CustomShort != "" {
 			shortCode = req.CustomShort
-			val, err := rdb.Exists(ctx, shortCode).Result()
+			val, err := redisClient.Exists(ctx, shortCode).Result()
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "Sunucu hatası"})
 				return
@@ -274,7 +274,7 @@ func main() {
 		} else {
 			for {
 				shortCode = generateShortCode()
-				val, err := rdb.Exists(ctx, shortCode).Result()
+				val, err := redisClient.Exists(ctx, shortCode).Result()
 				if err != nil {
 					log.Printf("Redis kontrolü sırasında hata: %v", err)
 					c.JSON(http.StatusInternalServerError, gin.H{"error": "Sunucu hatası"})
@@ -285,7 +285,7 @@ func main() {
 				}
 			}
 		}
-		err := rdb.Set(ctx, shortCode, req.URL, 0).Err()
+		err := redisClient.Set(ctx, shortCode, req.URL, 0).Err()
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "URL kaydedilemedi."})
 			return
@@ -298,7 +298,7 @@ func main() {
 
 	router.GET("/qr/:shortCode", func(c *gin.Context) {
 		shortCode := c.Param("shortCode")
-		val, err := rdb.Exists(ctx, shortCode).Result()
+		val, err := redisClient.Exists(ctx, shortCode).Result()
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Sunucu hatası"})
 			return
@@ -320,6 +320,7 @@ func main() {
 
 	// --- 2. Korumalı Grup ve Endpoint'ler ---
 	authorized := router.Group("/")
+
 	authorized.Use(authMiddleware())
 	{
 		authorized.POST("/links", func(c *gin.Context) {
@@ -341,7 +342,7 @@ func main() {
 			var shortCode string
 			if req.CustomShort != "" {
 				shortCode = req.CustomShort
-				val, err := rdb.Exists(ctx, shortCode).Result()
+				val, err := redisClient.Exists(ctx, shortCode).Result()
 				if err != nil {
 					c.JSON(http.StatusInternalServerError, gin.H{"error": "Sunucu hatası"})
 					return
@@ -353,7 +354,7 @@ func main() {
 			} else {
 				for {
 					shortCode = generateShortCode()
-					val, err := rdb.Exists(ctx, shortCode).Result()
+					val, err := redisClient.Exists(ctx, shortCode).Result()
 					if err != nil {
 						log.Printf("Redis kontrolü sırasında hata: %v", err)
 						c.JSON(http.StatusInternalServerError, gin.H{"error": "Sunucu hatası"})
@@ -365,7 +366,7 @@ func main() {
 				}
 			}
 
-			tx, err := db.Begin()
+			tx, err := database.Begin()
 			if err != nil {
 				log.Printf("Transaction başlatılamadı: %v", err)
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "İşlem başlatılamadı."})
@@ -409,7 +410,7 @@ func main() {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "İşlem onaylanamadı."})
 				return
 			}
-			err = rdb.Set(ctx, shortCode, req.URL, 0).Err()
+			err = redisClient.Set(ctx, shortCode, req.URL, 0).Err()
 			if err != nil {
 				log.Printf("KRİTİK HATA: Link DB'ye yazıldı ama Redis'e yazılamadı. shortCode: %s", shortCode)
 			}
@@ -439,7 +440,7 @@ func main() {
 					l.id
 				ORDER BY 
 					l.created_at DESC`
-			rows, err := db.Query(query, userID)
+			rows, err := database.Query(query, userID)
 			if err != nil {
 				log.Printf("Linkler çekilirken veritabanı hatası: %v", err)
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "Linkler alınamadı."})
@@ -469,7 +470,7 @@ func main() {
 	// --- 3. Herkese Açık ve Dinamik Endpoint (EN SONDA) ---
 	router.GET("/:shortCode", func(c *gin.Context) {
 		shortCode := c.Param("shortCode")
-		originalURL, err := rdb.Get(ctx, shortCode).Result()
+		originalURL, err := redisClient.Get(ctx, shortCode).Result()
 		if err == redis.Nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Kısa URL bulunamadı."})
 			return
@@ -479,7 +480,7 @@ func main() {
 		}
 		event := ClickEvent{ShortCode: shortCode}
 		eventBody, _ := json.Marshal(event)
-		err = rmqChan.Publish(
+		err = rabbitMqChannel.Publish(
 			"", "clicks", false, false,
 			amqp.Publishing{ContentType: "application/json", Body: eventBody},
 		)
