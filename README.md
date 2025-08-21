@@ -179,4 +179,44 @@ graph LR
 
 Aşağıdaki adımlar, sistemin tüm ana işlevlerini test etmenizi sağlayan baştan sona bir kullanım senaryosudur.
 
-**
+**1. Yeni Bir Kullanıcı Kaydedin**
+```sh
+curl -X POST http://localhost:8080/register \
+-H "Content-Type: application/json" \
+-d '{"email": "kullanici@example.com", "password": "guvenlisifre123"}'
+```
+**2. Giriş Yapın ve Erişim Token'ı Alın**
+(`jq` kurulu olmalıdır).
+```sh
+TOKEN=$(curl -s -X POST http://localhost:8080/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "kullanici@example.com", "password": "guvenlisifre123"}' | jq -r .token)
+```
+**3. Korumalı Endpoint ile Etiketli Bir Link Oluşturun**
+```sh
+curl -X POST http://localhost:8080/links \
+-H "Authorization: Bearer $TOKEN" \
+-H "Content-Type: application/json" \
+-d '{"url": "[https://github.com/hashicorp/consul](https://github.com/hashicorp/consul)", "custom_short": "consul-projesi", "tags": ["devops", "consul"]}'
+```
+**4. Linklerinizi Listeleyin ve Etiketleri Görün**
+```sh
+curl -X GET http://localhost:8080/links \
+-H "Authorization: Bearer $TOKEN"
+```
+**5. Yönlendirmeyi ve Analitiği Test Edin**
+Tarayıcınızda `http://localhost:8080/consul-projesi` adresine gidin.
+
+**6. Tıklama Verisini Kontrol Edin**
+```sh
+curl http://localhost:8081/analytics/consul-projesi
+```
+**7. QR Kodu Görüntüleyin**
+Tarayıcınızda `http://localhost:8080/qr/consul-projesi` adresine gidin.
+
+**8. Anonim Link Oluşturma**
+```sh
+curl -X POST http://localhost:8080/shorten \
+-H "Content-Type: application/json" \
+-d '{"url": "https://redis.io/", "custom_short": "redis-sitesi"}'
+```
