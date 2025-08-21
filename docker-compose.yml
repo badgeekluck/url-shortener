@@ -89,6 +89,7 @@ services:
           consul kv put config/redis/port 6379 &&
           consul kv put config/rabbitmq/host rabbitmq &&
           consul kv put config/rabbitmq/port 5672 &&
+          consul kv put config/app/domain http://13.60.218.106:8080 &&
           echo 'Consul KV store initialized.'
         ) &
         consul agent -server -bootstrap-expect=1 -dev -client=0.0.0.0 -ui
