@@ -32,6 +32,7 @@ var (
 	database        *sql.DB
 	consulClient    *api.Client
 	jwtSecretKey    []byte //
+	appDomain       string
 	ctx             = context.Background()
 )
 
@@ -98,6 +99,7 @@ func init() {
 		dbUser, dbPassword, dbName, dbHost, dbPort)
 
 	jwtSecretKey = []byte(getConfig(kv, "config/jwt/secret", "default_secret"))
+	appDomain = getConfig(kv, "config/app/domain", "http://localhost:8080")
 
 	// Servislere Bağlan
 	redisClient = redis.NewClient(&redis.Options{Addr: redisAddr})
@@ -345,7 +347,7 @@ func main() {
 
 		c.JSON(http.StatusOK, gin.H{
 			"original_url": req.URL,
-			"short_url":    "http://localhost:8080/" + shortCode,
+			"short_url":    appDomain + "/" + shortCode,
 		})
 	})
 
@@ -469,7 +471,7 @@ func main() {
 			}
 			c.JSON(http.StatusCreated, gin.H{
 				"original_url": req.URL,
-				"short_url":    "http://localhost:8080/" + shortCode,
+				"short_url":    appDomain + "/" + shortCode,
 			})
 		})
 
@@ -579,7 +581,7 @@ func main() {
 			log.Fatalf("Sunucu hatası: %s\n", err)
 		}
 	}()
-	
+
 	// Kapanma sinyallerini (Ctrl+C veya Docker'dan gelen SIGTERM) dinlemek için bir channel oluşturulur.
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
