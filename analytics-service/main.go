@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -33,48 +32,74 @@ func getConfig(kv *api.KV, key string, defaultValue string) string {
 	return string(pair.Value)
 }
 
-func startMessageConsumer(db *sql.DB) {
-	rmqHost := os.Getenv("RABBITMQ_HOST")
-	rmqPort := os.Getenv("RABBITMQ_PORT")
-	rmqAddr := fmt.Sprintf("amqp://guest:guest@%s:%s/", rmqHost, rmqPort)
+func startMessageConsumer(db *sql.DB, kv *api.KV) {
+	// Bu fonksiyon artık sonsuz bir döngü içinde çalışacak ve bağlantı koptuğunda yeniden bağlanmayı deneyecek.
+	for {
+		rmqHost := getConfig(kv, "config/rabbitmq/host", "rabbitmq")
+		rmqPort := getConfig(kv, "config/rabbitmq/port", "5672")
+		rmqAddr := fmt.Sprintf("amqp://guest:guest@%s:%s/", rmqHost, rmqPort)
 
-	conn, err := amqp.Dial(rmqAddr)
-	if err != nil {
-		log.Fatalf("RabbitMQ'ya bağlanamadı: %s", err)
-	}
-	defer conn.Close()
+		conn, err := amqp.Dial(rmqAddr)
+		if err != nil {
+			log.Printf("RabbitMQ'ya bağlanamadı, 5 saniye sonra tekrar denenecek: %s", err)
+			time.Sleep(5 * time.Second)
+			continue // Döngünün başına dön ve tekrar dene
+		}
+		defer conn.Close()
 
-	ch, err := conn.Channel()
-	if err != nil {
-		log.Fatalf("Kanal açılamadı: %s", err)
-	}
-	defer ch.Close()
-
-	q, err := ch.QueueDeclare("clicks", true, false, false, false, nil)
-	if err != nil {
-		log.Fatalf("Kuyruk oluşturulamadı: %s", err)
-	}
-
-	msgs, err := ch.Consume(q.Name, "", true, false, false, false, nil)
-	if err != nil {
-		log.Fatalf("Mesajlar tüketilemedi: %s", err)
-	}
-
-	log.Printf(" [*] %s kuyruğu dinleniyor...", q.Name)
-
-	// Gelen mesajları sonsuz bir döngüde işle
-	for d := range msgs {
-		var event ClickEvent
-		if err := json.Unmarshal(d.Body, &event); err != nil {
-			log.Printf("Mesaj parse edilemedi: %s", err)
+		ch, err := conn.Channel()
+		if err != nil {
+			log.Printf("RabbitMQ kanalı açılamadı, 5 saniye sonra tekrar denenecek: %s", err)
+			time.Sleep(5 * time.Second)
 			continue
 		}
-		log.Printf("Tıklama alındı: %s", event.ShortCode)
+		defer ch.Close()
 
-		_, err := db.Exec("INSERT INTO clicks (short_code) VALUES ($1)", event.ShortCode)
+		q, err := ch.QueueDeclare("clicks", true, false, false, false, nil)
 		if err != nil {
-			log.Printf("Veritabanına yazılamadı: %s", err)
+			log.Printf("Kuyruk oluşturulamadı: %s", err)
+			time.Sleep(5 * time.Second)
+			continue
 		}
+
+		msgs, err := ch.Consume(
+			q.Name, // queue
+			"",     // consumer
+			false,  // auto-ack
+			false,  // exclusive
+			false,  // no-local
+			false,  // no-wait
+			nil,    // args
+		)
+		if err != nil {
+			log.Printf("Mesajlar tüketilemedi: %s", err)
+			time.Sleep(5 * time.Second)
+			continue
+		}
+
+		log.Printf(" [*] %s kuyruğu dinleniyor...", q.Name)
+
+		for d := range msgs {
+			var event ClickEvent
+			if err := json.Unmarshal(d.Body, &event); err != nil {
+				log.Printf("Mesaj parse edilemedi (bozuk mesaj): %s", err)
+				d.Ack(false)
+				continue
+			}
+
+			log.Printf("Tıklama alındı: %s", event.ShortCode)
+
+			_, err = db.Exec("INSERT INTO clicks (short_code) VALUES ($1)", event.ShortCode)
+			if err != nil {
+				log.Printf("Veritabanına yazılamadı, mesaj yeniden kuyruğa eklenecek: %s", err)
+				d.Nack(false, true)
+			} else {
+				d.Ack(false)
+			}
+		}
+
+		log.Println("Tüketici döngüsü sona erdi, yeniden başlatılıyor.")
+		time.Sleep(5 * time.Second)
 	}
 }
 
@@ -123,9 +148,8 @@ func main() {
 	}
 	log.Println("Servis başarıyla Consul'a kaydedildi.")
 
-	// RabbitMQ dinleyicisini arka planda bir goroutine olarak başlatıyoruz.
-	// Bu sayede programın ana akışı web sunucusunu çalıştırmaya devam edebilir.
-	go startMessageConsumer(db)
+	// RabbitMQ dinleyicisini arka planda bir goroutine olarak başlatıyoruz. Bu sayede programın ana akışı web sunucusunu çalıştırmaya devam eder.
+	go startMessageConsumer(db, kv)
 
 	// Gin web sunucu
 	router := gin.Default()
