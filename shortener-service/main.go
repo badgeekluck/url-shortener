@@ -259,6 +259,8 @@ func main() {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
+
+		// Unique bir shortCode bulma mantığı aynı kalıyor
 		var shortCode string
 		if req.CustomShort != "" {
 			shortCode = req.CustomShort
@@ -268,6 +270,7 @@ func main() {
 				return
 			}
 			if val == 1 {
+				// Not: Bu kontrol hem Redis'i hem de DB'yi kontrol etmeli.
 				c.JSON(http.StatusConflict, gin.H{"error": "Bu özel link daha önce alınmış."})
 				return
 			}
@@ -285,11 +288,30 @@ func main() {
 				}
 			}
 		}
-		err := redisClient.Set(ctx, shortCode, req.URL, 0).Err()
+
+		// Önce ana veritabanına (PostgreSQL) yaz. owner_id için sql.NullInt64 kullanarak NULL değer gönder.
+		_, err := database.Exec(
+			"INSERT INTO links (owner_id, short_code, original_url) VALUES ($1, $2, $3)",
+			sql.NullInt64{}, shortCode, req.URL,
+		)
 		if err != nil {
+			// Eğer short_code zaten alınmışsa (UNIQUE constraint), conflict hatası ver.
+			if pgErr, ok := err.(*pq.Error); ok && pgErr.Code == "23505" {
+				c.JSON(http.StatusConflict, gin.H{"error": "Bu özel link daha önce alınmış."})
+				return
+			}
+			log.Printf("Anonim link oluşturulurken veritabanı hatası: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "URL kaydedilemedi."})
 			return
 		}
+
+		// PostgreSQL'e başarıyla yazıldıktan sonra, hızlı erişim için Redis'e (cache'e) ekle.
+		err = redisClient.Set(ctx, shortCode, req.URL, 0).Err()
+		if err != nil {
+			log.Printf("KRİTİK HATA: Link DB'ye yazıldı ama Redis'e yazılamadı (anonim). shortCode: %s", shortCode)
+			// Bu durumda bile kullanıcıya başarılı cevabı dönebiliriz, çünkü link artık kalıcı.
+		}
+
 		c.JSON(http.StatusOK, gin.H{
 			"original_url": req.URL,
 			"short_url":    "http://localhost:8080/" + shortCode,
