@@ -15,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/go-redis/redis/v8"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 	"github.com/hashicorp/consul/api"
 	"github.com/lib/pq"
 	"github.com/skip2/go-qrcode"
@@ -27,6 +28,7 @@ var (
 	rabbitMqChannel *amqp.Channel
 	database        *sql.DB
 	consulClient    *api.Client
+	jwtSecretKey    []byte //
 	ctx             = context.Background()
 )
 
@@ -91,6 +93,8 @@ func init() {
 	dbName := getConfig(kv, "config/postgres/dbname", "analytics_db")
 	connStr := fmt.Sprintf("user=%s password=%s dbname=%s host=%s port=%s sslmode=disable",
 		dbUser, dbPassword, dbName, dbHost, dbPort)
+
+	jwtSecretKey = []byte(getConfig(kv, "config/jwt/secret", "default_secret"))
 
 	// Servislere Bağlan
 	redisClient = redis.NewClient(&redis.Options{Addr: redisAddr})
@@ -166,7 +170,7 @@ func authMiddleware() gin.HandlerFunc {
 			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 				return nil, fmt.Errorf("beklenmedik imzalama metodu: %v", token.Header["alg"])
 			}
-			return []byte(jwtSecretKey), nil
+			return jwtSecretKey, nil
 		})
 
 		if err != nil || !token.Valid {
@@ -189,18 +193,25 @@ func authMiddleware() gin.HandlerFunc {
 func publishClickEvent(shortCode string) {
 	event := ClickEvent{ShortCode: shortCode}
 	eventBody, _ := json.Marshal(event)
+
+	// Her mesaj için benzersiz bir ID oluştur
+	messageID := uuid.NewString()
+
 	err := rabbitMqChannel.Publish(
 		"",       // exchange
-		"clicks", // routing key (kuyruk adı)
+		"clicks", // routing key
 		false,    // mandatory
 		false,    // immediate
 		amqp.Publishing{
 			ContentType:  "application/json",
-			DeliveryMode: amqp.Persistent, // diske kaydetme için bu gerekli
+			DeliveryMode: amqp.Persistent,
 			Body:         eventBody,
+			MessageId:    messageID,
 		})
 	if err != nil {
 		log.Printf("RabbitMQ'ya mesaj gönderilemedi: %s", err)
+	} else {
+		log.Printf("Mesaj gönderildi. MessageID: %s", messageID)
 	}
 }
 
@@ -261,8 +272,7 @@ func main() {
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 		})
 
-		jwtSecretKey := getConfig(consulClient.KV(), "config/jwt/secret", "default_secret")
-		tokenString, err := claims.SignedString([]byte(jwtSecretKey))
+		tokenString, err := claims.SignedString(jwtSecretKey)
 		if err != nil {
 			log.Printf("JWT imzalanamadı: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Giriş yapılamadı."})

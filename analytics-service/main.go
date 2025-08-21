@@ -10,12 +10,14 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/hashicorp/consul/api"
+	"github.com/lib/pq"
 	_ "github.com/lib/pq"
 	"github.com/streadway/amqp"
 )
 
 type ClickEvent struct {
 	ShortCode string `json:"short_code"`
+	MessageID string `json:"-"` // JSON'dan gelmeyecek, AMQP header'ından gelecek.
 }
 
 type AnalyticsResult struct {
@@ -87,13 +89,27 @@ func startMessageConsumer(db *sql.DB, kv *api.KV) {
 				continue
 			}
 
-			log.Printf("Tıklama alındı: %s", event.ShortCode)
+			event.MessageID = d.MessageId
+			if event.MessageID == "" {
+				log.Println("Uyarı: Gelen mesajın bir MessageID'si yok. İşleniyor ama tekrarlanabilir.")
+			}
 
-			_, err = db.Exec("INSERT INTO clicks (short_code) VALUES ($1)", event.ShortCode)
+			log.Printf("Tıklama alındı: %s, MessageID: %s", event.ShortCode, event.MessageID)
+
+			_, err = db.Exec("INSERT INTO clicks (short_code, message_id) VALUES ($1, $2)", event.ShortCode, event.MessageID)
 			if err != nil {
-				log.Printf("Veritabanına yazılamadı, mesaj yeniden kuyruğa eklenecek: %s", err)
-				d.Nack(false, true)
+				// Hatanın "unique_violation" olup olmadığını kontrol et
+				if pgErr, ok := err.(*pq.Error); ok && pgErr.Code == "23505" {
+					log.Printf("Mükerrer mesaj tespit edildi (MessageID: %s). Mesaj atlanıyor.", event.MessageID)
+					// Bu mesajı zaten işlemişiz. Tekrar denemenin anlamı yok. Başarıyla işlenmiş gibi onaylayıp kuyruktan sil.
+					d.Ack(false)
+				} else {
+					// Başka bir veritabanı hatası (örn: bağlantı kopması)
+					log.Printf("Veritabanına yazılamadı, mesaj yeniden kuyruğa eklenecek: %s", err)
+					d.Nack(false, true)
+				}
 			} else {
+				// İşlem başarılı. Mesajı onaylayıp kuyruktan siliyoruz.
 				d.Ack(false)
 			}
 		}
