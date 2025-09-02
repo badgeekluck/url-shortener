@@ -132,9 +132,8 @@ func main() {
 	dbUser := getConfig(kv, "config/postgres/user", "postgres")
 	dbPassword := getConfig(kv, "config/postgres/password", "")
 	dbName := getConfig(kv, "config/postgres/dbname", "analytics_db")
-
-	dbHost := "postgres"
-	dbPort := "5432"
+	dbHost := getConfig(kv, "config/postgres/host", "postgres")
+	dbPort := getConfig(kv, "config/postgres/port", "5432")
 
 	connStr := fmt.Sprintf("user=%s password=%s dbname=%s host=%s port=%s sslmode=disable",
 		dbUser, dbPassword, dbName, dbHost, dbPort)

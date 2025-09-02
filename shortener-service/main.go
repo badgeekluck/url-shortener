@@ -58,7 +58,7 @@ type ClickEvent struct {
 	ShortCode string `json:"short_code"`
 }
 
-// --- Yardımcı Fonksiyonlar ---
+// Yardımcı fonksiyon
 
 func getConfig(kv *api.KV, key string, defaultValue string) string {
 	pair, _, err := kv.Get(key, nil)
@@ -74,7 +74,7 @@ func init() {
 	consulConfig.Address = "consul:8500"
 
 	var err error
-	consulClient, err = api.NewClient(consulConfig) // <-- BURAYI DEĞİŞTİR (:= yerine = kullandık)
+	consulClient, err = api.NewClient(consulConfig)
 
 	if err != nil {
 		log.Fatalf("Consul istemcisi oluşturulamadı: %v", err)
@@ -90,8 +90,8 @@ func init() {
 	rmqPort := getConfig(kv, "config/rabbitmq/port", "5672")
 	rmqAddr := fmt.Sprintf("amqp://guest:guest@%s:%s/", rmqHost, rmqPort)
 
-	dbHost := "postgres"
-	dbPort := "5432"
+	dbHost := getConfig(kv, "config/postgres/host", "postgres")
+	dbPort := getConfig(kv, "config/postgres/port", "5432")
 	dbUser := getConfig(kv, "config/postgres/user", "postgres")
 	dbPassword := getConfig(kv, "config/postgres/password", "")
 	dbName := getConfig(kv, "config/postgres/dbname", "analytics_db")
