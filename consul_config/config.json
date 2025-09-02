@@ -30,5 +30,11 @@
   {
     "key": "config/rabbitmq/port",
     "value": "5672"
+  },
+  {
+    "key": "config/postgres/host", "value": "url-shortener-db.cz4oe2iuyddl.eu-north-1.rds.amazonaws.com"
+  },
+  {
+    "key": "config/postgres/port", "value": "5432"
   }
 ]
