@@ -1,0 +1,42 @@
+[
+  {
+    "key": "config/postgres/user",
+    "value": ""
+  },
+  {
+    "key": "config/postgres/password",
+    "value": ""
+  },
+  {
+    "key": "config/postgres/dbname",
+    "value": ""
+  },
+  {
+    "key": "config/jwt/secret",
+    "value": ""
+  },
+  {
+    "key": "config/redis/host",
+    "value": ""
+  },
+  {
+    "key": "config/redis/port",
+    "value": ""
+  },
+  {
+    "key": "config/rabbitmq/host",
+    "value": ""
+  },
+  {
+    "key": "config/rabbitmq/port",
+    "value": ""
+  },
+  {
+    "key": "config/postgres/host",
+    "value": ""
+  },
+  {
+    "key": "config/postgres/port",
+    "value": ""
+  }
+]
