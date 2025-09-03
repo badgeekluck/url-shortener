@@ -82,16 +82,15 @@ services:
       sh -c "
         (
           sleep 10 &&
-          consul kv put config/postgres/user harunbas &&
-          consul kv put config/postgres/password 12345678 &&
-          consul kv put config/postgres/dbname analytics_db &&
-          consul kv put config/jwt/secret buraya-cok-guvenli-ve-tahmin-edilemez-bir-metin-yaz &&
-          consul kv put config/redis/host redis &&
-          consul kv put config/redis/port 6379 &&
-          consul kv put config/rabbitmq/host rabbitmq &&
-          consul kv put config/rabbitmq/port 5672 &&
-          consul kv put config/app/domain http://13.60.218.106:8080 &&
-          echo 'Consul KV store initialized.'
+          echo 'jq (JSON işlemcisi) kuruluyor...' &&
+          apk add --no-cache jq &&
+          echo 'config.json Consul''a yükleniyor...' &&
+          jq -c '.[]' /consul/config/config.json | while read i; do
+            key=$(echo $i | jq -r '.key');
+            value=$(echo $i | jq -r '.value');
+            consul kv put \"$key\" \"$value\";
+          done &&
+          echo 'Consul ayarları başarıyla yüklendi.'
         ) &
         consul agent -server -bootstrap-expect=1 -dev -client=0.0.0.0 -ui
       "
