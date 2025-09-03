@@ -1,11 +1,11 @@
 [
   {
     "key": "config/postgres/user",
-    "value": "harunbas"
+    "value": "postgres"
   },
   {
     "key": "config/postgres/password",
-    "value": "12345678"
+    "value": "adgjl141A??"
   },
   {
     "key": "config/postgres/dbname",
