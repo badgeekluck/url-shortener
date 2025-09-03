@@ -43,6 +43,7 @@ services:
       - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./db_init:/docker-entrypoint-initdb.d
     healthcheck:
       test: [ "CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}" ]
       interval: 5s
@@ -76,7 +77,7 @@ services:
       - "8500:8500"
       - "8600:8600/udp"
     volumes:
-      - ./consul_config:/consul/config
+      - consul_data:/consul/data
     command: >
       sh -c "
         (
@@ -102,3 +103,4 @@ services:
 
 volumes:
   postgres_data:
+  consul_data:
