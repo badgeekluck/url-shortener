@@ -78,27 +78,22 @@ services:
       - "8600:8600/udp"
     volumes:
       - consul_data:/consul/data
-    command: |
-      sh -c '
-        # Arka planda yapılandırmayı yükleme işlemini başlat
+    command: >
+      sh -c "
         (
           sleep 10 &&
-          echo "jq (JSON işlemcisi) kuruluyor..." &&
+          echo 'jq (JSON işlemcisi) kuruluyor...' &&
           apk add --no-cache jq &&
-          echo "config.json Consula yükleniyor..." &&
-          # config.json dosyasını satır satır oku
-          jq -c ".[]" /consul/config/config.json | while read i; do
-            # Her satırdan key ve valueyu al
-            key=$(echo "$i" | jq -r ".key");
-            value=$(echo "$i" | jq -r ".value");
-            # Consul''a kaydet
-            consul kv put "$key" "$value";
+          echo 'config.json Consul''a yükleniyor...' &&
+          jq -c '.[]' /consul/config/config.json | while read i; do
+            key=$$(echo $$i | jq -r '.key');
+            value=$$(echo $$i | jq -r '.value');
+            consul kv put \"$$key\" \"$$value\";
           done &&
-          echo "Consul ayarları başarıyla yüklendi."
+          echo 'Consul ayarları başarıyla yüklendi.'
         ) &
-        # Ana consul agent''ını ön planda çalıştırmaya devam et
         consul agent -server -bootstrap-expect=1 -dev -client=0.0.0.0 -ui
-      '
+      "
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8500/v1/status/leader" ]
       interval: 5s
